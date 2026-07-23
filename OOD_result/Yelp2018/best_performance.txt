@@ -1,0 +1,8 @@
+ ====layers:5, cl_rate:10, K:10, groups:3, neg_per_group:1
+ same_group_weight:1.0, balanced_group_weight:1.0
+ align_reg:10
+ best_hr@20:0.087213=====best_recall@20:0.078443====best_ndcg@20:0.055729
+ test_OOD_hr@20:0.087213   test_OOD_recall@20:0.078443   test_OOD_ndcg@20:0.055729
+ test_IID_hr@20:0.087213   test_IID_recall@20:0.078443   test_IID_ndcg@20:0.055729
+ Result_path:OOD_result/BiSNA_PGR/yelp2018/10_5_10_10_groups3_neg1_sgw1.0_bgw1.0_0504-142614
+
