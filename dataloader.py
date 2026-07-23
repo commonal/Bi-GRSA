@@ -1,13 +1,9 @@
-import math
 import os
-import random
 from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 import torch
-
-import utils
 
 NEW_STYLE_DATASETS = {"amazon-book.new", "tencent.new", "yelp2018.new"}
 VAL_ONLY_DATASETS = {"Ciao", "douban", "amazon_art", "yahoo.new"}
@@ -89,23 +85,6 @@ def _build_frequency_list(indices, size):
     return counts.astype(np.int64).tolist()
 
 
-def _sample_unobserved_item(num_items, observed_items, max_trials=100):
-    observed_items = set(observed_items)
-    if len(observed_items) >= num_items:
-        raise RuntimeError("Failed to sample a negative item because the user interacted with all items.")
-
-    for _ in range(max_trials):
-        candidate = random.randrange(num_items)
-        if candidate not in observed_items:
-            return candidate
-
-    for candidate in range(num_items):
-        if candidate not in observed_items:
-            return candidate
-
-    raise RuntimeError("Failed to sample a valid negative item.")
-
-
 class Data(object):
     def __init__(self, config, logger):
         self.logger = logger
@@ -137,68 +116,6 @@ class Data(object):
                 total_interactions / self.num_items / self.num_users * 100,
             )
         )
-
-        percentile = getattr(config, "global_group_ratio", 50)
-        user_interactions = np.asarray(self.active_train_count, dtype=np.float32)
-        item_interactions = np.asarray(self.pop_train_count, dtype=np.float32)
-
-        user_threshold = np.percentile(user_interactions, percentile)
-        item_threshold = np.percentile(item_interactions, percentile)
-
-        self.active_user_ids = set(np.where(user_interactions >= user_threshold)[0])
-        self.popular_item_ids = set(np.where(item_interactions >= item_threshold)[0])
-        self.cold_item_ids = set(np.where(item_interactions < item_threshold)[0])
-
-        self.logger.info(
-            "user activity threshold: %.4f (percentile=%s)",
-            user_threshold,
-            percentile,
-        )
-        self.logger.info(
-            "item popularity threshold: %.4f (percentile=%s)",
-            item_threshold,
-            percentile,
-        )
-
-    def analyze_active_user_behavior(self):
-        active_users = self.active_user_ids
-        active_popular_interactions = 0
-        active_unpopular_interactions = 0
-
-        for user in active_users:
-            if user not in self.train_U2I:
-                continue
-            for item in self.train_U2I[user]:
-                if item in self.popular_item_ids:
-                    active_popular_interactions += 1
-                else:
-                    active_unpopular_interactions += 1
-
-        total_active_interactions = active_popular_interactions + active_unpopular_interactions
-        if total_active_interactions == 0:
-            return 0, 0
-
-        self.logger.info(
-            "active users -> popular items interactions: %d",
-            active_popular_interactions,
-        )
-        self.logger.info(
-            "active users -> unpopular items interactions: %d",
-            active_unpopular_interactions,
-        )
-        self.logger.info(
-            "active users total interactions: %d",
-            total_active_interactions,
-        )
-        self.logger.info(
-            "active users -> popular items ratio: %.2f%%",
-            active_popular_interactions / total_active_interactions * 100,
-        )
-        self.logger.info(
-            "active users -> unpopular items ratio: %.2f%%",
-            active_unpopular_interactions / total_active_interactions * 100,
-        )
-        return active_popular_interactions, active_unpopular_interactions
 
     def load_data(self):
         train_path = _resolve_split_file(self.dataset_path, "train.txt")
@@ -315,51 +232,6 @@ class Data(object):
             test_iid_sum,
         )
 
-    def bc_loss_data(self):
-        pop_user = {key: len(value) for key, value in self.train_U2I.items()}
-        pop_item = {key: len(value) for key, value in self.train_I2U.items()}
-
-        sorted_pop_user = sorted(set(pop_user.values()))
-        sorted_pop_item = sorted(set(pop_item.values()))
-        self.n_user_pop = len(sorted_pop_user)
-        self.n_item_pop = len(sorted_pop_item)
-
-        user_idx = {value: idx for idx, value in enumerate(sorted_pop_user)}
-        item_idx = {value: idx for idx, value in enumerate(sorted_pop_item)}
-
-        self.user_pop_idx = np.zeros(self.num_users, dtype=int)
-        self.item_pop_idx = np.zeros(self.num_items, dtype=int)
-        for key, value in pop_user.items():
-            self.user_pop_idx[key] = user_idx[value]
-        for key, value in pop_item.items():
-            self.item_pop_idx[key] = item_idx[value]
-
-        threshold_map = {
-            "ml-1m": 50,
-            "yelp2018": 47,
-            "douban-book": 22,
-            "gowalla": 22,
-            "amazon-book": 33,
-            "ml-20m": 100,
-            "addressa": 30,
-        }
-        dataset_key = self.dataset_name.replace(".new", "")
-        split_value = threshold_map.get(dataset_key)
-        if split_value is None:
-            split_value = float(
-                np.percentile(np.asarray(self.pop_train_count, dtype=np.float32), 50)
-            )
-
-        unpopular_item = []
-        popular_item = []
-        for item, pop in enumerate(self.pop_train_count):
-            if pop <= split_value:
-                unpopular_item.append(item)
-            else:
-                popular_item.append(item)
-        return unpopular_item, popular_item
-
-
 class Graph(object):
     def __init__(self, num_users, num_items, train_U2I, gama):
         self.num_users = num_users
@@ -424,26 +296,6 @@ class LaplaceGraph(Graph):
         ).coalesce()
 
 
-def next_batch_pairwise(data, batch_size):
-    training_data = data.training_data
-    random.shuffle(training_data)
-    batch_id = 0
-    data_size = len(training_data)
-
-    while batch_id < data_size:
-        batch_end = min(batch_id + batch_size, data_size)
-        users = [training_data[idx][0] for idx in range(batch_id, batch_end)]
-        items = [training_data[idx][1] for idx in range(batch_id, batch_end)]
-        batch_id = batch_end
-
-        u_idx, i_idx, j_idx = [], [], []
-        for index, user in enumerate(users):
-            u_idx.append(user)
-            i_idx.append(items[index])
-            j_idx.append(_sample_unobserved_item(data.num_items, data.train_U2I[user]))
-        yield u_idx, i_idx, j_idx
-
-
 def unpack_interaction(record):
     if isinstance(record, dict):
         if "user" in record and "item" in record:
@@ -465,129 +317,6 @@ def unpack_interaction(record):
         return int(record[0]), int(record[1])
 
     raise ValueError(f"Unsupported interaction format: {type(record)}")
-
-
-class CrossPairwiseSampler:
-    def __init__(
-            self,
-            data,
-            batch_size,
-            max_k_interact=3,
-            sample_ratio=1.0,
-            sample_rate=1.0,
-            seed=2026,
-            group_retry=80,
-            inner_retry=120,
-    ):
-        self.data = data
-        self.batch_size = int(batch_size)
-        self.max_k_interact = max(2, int(max_k_interact))
-        self.sample_ratio = float(sample_ratio)
-        self.sample_rate = float(sample_rate)
-        self.group_retry = max(1, int(group_retry))
-        self.inner_retry = max(1, int(inner_retry))
-
-        self.rng = np.random.default_rng(seed)
-        self.training_pairs = np.asarray(data.training_data, dtype=np.int64)
-        self.num_pairs = int(len(self.training_pairs))
-        self.user_history = {
-            int(user_id): set(int(item_id) for item_id in item_ids)
-            for user_id, item_ids in data.train_U2I.items()
-        }
-        self.steps_per_epoch = max(1, math.ceil(self.num_pairs / max(1, self.batch_size)))
-        self.k_values = list(range(2, self.max_k_interact + 1))
-        self.group_plan = self._build_group_plan()
-
-    def _build_group_plan(self):
-        if self.max_k_interact == 2:
-            return {2: max(1, int(math.ceil(self.batch_size * self.sample_rate)))}
-
-        ratios = np.power(
-            self.sample_ratio,
-            np.arange(self.max_k_interact - 2, -1, -1, dtype=np.float32),
-        )
-        base_counts = np.round(self.batch_size * ratios / ratios.sum()).astype(np.int64)
-        base_counts = np.maximum(base_counts, 1)
-        scaled_counts = np.ceil(base_counts * self.sample_rate).astype(np.int64)
-        return {
-            k_value: int(max(1, scaled_counts[offset]))
-            for offset, k_value in enumerate(self.k_values)
-        }
-
-    def __len__(self):
-        return self.steps_per_epoch
-
-    def _sample_interaction(self):
-        pair = self.training_pairs[self.rng.integers(0, self.num_pairs)]
-        return int(pair[0]), int(pair[1])
-
-    def _can_append(self, current_users, current_items, cand_user, cand_item):
-        if cand_user in current_users or cand_item in current_items:
-            return False
-
-        cand_history = self.user_history.get(cand_user, set())
-        if any(existing_item in cand_history for existing_item in current_items):
-            return False
-
-        for existing_user in current_users:
-            if cand_item in self.user_history.get(existing_user, set()):
-                return False
-
-        return True
-
-    def _sample_one_group(self, k_value):
-        for _ in range(self.group_retry):
-            start_user, start_item = self._sample_interaction()
-            group_users = [start_user]
-            group_items = [start_item]
-
-            for _ in range(self.inner_retry):
-                if len(group_users) == k_value:
-                    return group_users, group_items
-
-                cand_user, cand_item = self._sample_interaction()
-                if self._can_append(group_users, group_items, cand_user, cand_item):
-                    group_users.append(cand_user)
-                    group_items.append(cand_item)
-
-            if len(group_users) == k_value:
-                return group_users, group_items
-
-        return None
-
-    def sample_batch(self):
-        sampled = {}
-        for k_value, num_groups in self.group_plan.items():
-            user_groups = []
-            item_groups = []
-            attempts = 0
-            max_attempts = max(num_groups * 4, 16)
-
-            while len(user_groups) < num_groups and attempts < max_attempts:
-                group = self._sample_one_group(k_value)
-                attempts += 1
-                if group is None:
-                    continue
-                group_users, group_items = group
-                user_groups.append(group_users)
-                item_groups.append(group_items)
-
-            if user_groups:
-                sampled[k_value] = (
-                    np.asarray(user_groups, dtype=np.int64),
-                    np.asarray(item_groups, dtype=np.int64),
-                )
-
-        if not sampled:
-            raise RuntimeError(
-                "CrossPairwiseSampler failed to construct any valid CPR groups. "
-                "You can try reducing cpr_k or sample_rate."
-            )
-        return sampled
-
-    def __iter__(self):
-        for _ in range(self.steps_per_epoch):
-            yield self.sample_batch()
 
 
 class PopularityBucketSampler:
@@ -729,79 +458,3 @@ def next_batch_group_balanced(data, batch_size, sampler):
             np.asarray(balanced_neg_items, dtype=np.int64),
             np.asarray(pos_groups, dtype=np.int64),
         )
-
-
-def user_items_2_group_pop(data):
-    group_1, group_2 = [], []
-    for user_id in data.train_U2I.keys():
-        items = data.train_U2I[user_id]
-        items_sorted = list(
-            np.asarray(items)[np.argsort(np.asarray(data.pop_train_count)[items])]
-        )
-        if len(items_sorted) % 2 != 0:
-            drop_idx = random.sample(range(len(items_sorted)), 1)[0]
-            items_sorted = np.delete(items_sorted, drop_idx)
-        half = int(len(items_sorted) / 2)
-        group_1.extend(items_sorted[0:half])
-        group_2.extend(items_sorted[half:])
-    return np.asarray(group_1), np.asarray(group_2)
-
-
-def item_users_2_group_act(data, min_users=1):
-    group_1, group_2 = [], []
-    for item_id in data.train_I2U.keys():
-        users = data.train_I2U[item_id]
-        if len(users) < min_users:
-            continue
-
-        users_sorted = list(
-            np.asarray(users)[np.argsort(np.asarray(data.active_train_count)[users])]
-        )
-        if len(users_sorted) % 2 != 0:
-            users_sorted.pop(random.choice(range(len(users_sorted))))
-        half = len(users_sorted) // 2
-        group_1.extend(users_sorted[:half])
-        group_2.extend(users_sorted[half:])
-    return np.asarray(group_1), np.asarray(group_2)
-
-
-def save_groups(G1, G2, G3, G4, dataset_name="default", cache_dir="cache"):
-    os.makedirs(cache_dir, exist_ok=True)
-    filename = os.path.join(cache_dir, f"{dataset_name}_saved_groups.npz")
-    np.savez(filename, G1=G1, G2=G2, G3=G3, G4=G4)
-
-
-def load_groups(dataset_name="default", cache_dir="cache"):
-    filename = os.path.join(cache_dir, f"{dataset_name}_saved_groups.npz")
-    if not os.path.exists(filename):
-        raise FileNotFoundError(f"No cached file found for dataset: {dataset_name}")
-    loaded = np.load(filename)
-    return loaded["G1"], loaded["G2"], loaded["G3"], loaded["G4"]
-
-
-def get_groups(data, force_reload=False, cache_dir="cache"):
-    dataset_name = data.dataset_name
-    filename = os.path.join(cache_dir, f"{dataset_name}_saved_groups.npz")
-
-    if not force_reload and os.path.exists(filename):
-        print(f"Loading cached group data for dataset: {dataset_name}...")
-        return load_groups(dataset_name, cache_dir)
-
-    print(f"Generating new group data for dataset: {dataset_name}...")
-    G1, G2 = user_items_2_group_pop(data)
-    G3, G4 = item_users_2_group_act(data)
-    save_groups(G1, G2, G3, G4, dataset_name, cache_dir)
-    return G1, G2, G3, G4
-
-
-class Config:
-    dataset_name: str = "douban"
-    dataset_path: str = "OOD_Data"
-    bpr_num_neg: int = 1
-
-
-if __name__ == "__main__":
-    config = Config()
-    filename = f"{config.dataset_name}.log"
-    logger = utils.get_logger(filename)
-    data = Data(config, logger)

@@ -18,26 +18,9 @@ The current entry script `BISNA-PGR.py` implements the proposed Bi-GRSA framewor
 - Pandas 1.3.4
 - tqdm
 
-## Data
-
-Please organize the datasets as follows:
-
-```text
-Data/
-├── gowalla/
-│   ├── train.txt
-│   └── test.txt
-├── yelp2018/
-│   ├── train.txt
-│   └── test.txt
-└── amazon-book/
-    ├── train.txt
-    └── test.txt
-```
 
 ## Usage
 ### Yelp2018
 ```python
-python BISNA-PGR.py --dataset_name yelp2018 --dataset_path Data --device 0 --layers_list "[5]" --cl_rate_list "[10]" --align_reg_list "[10]"
+python BISNA-PGR.py --dataset_name yelp2018 --dataset_path OOD_Data --device 0 --layers_list "[5]" --cl_rate_list "[10]" --align_reg_list "[10]"
 ```
-The GPU index can be changed using the --device argument.

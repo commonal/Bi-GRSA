@@ -14,7 +14,7 @@ import metrics
 import mini_batch_test
 import utils
 from base_model import BaseModel
-from evaluate import evaluate_model, log_results
+from evaluate import log_results
 
 
 def main_args():
@@ -48,8 +48,6 @@ def main_args():
     args.add_argument("--EarlyStop", default=10, type=int)
     args.add_argument("--emb_size", default=64, type=int)
     args.add_argument("--num_epoch", default=400, type=int)
-    args.add_argument("--topks", default="[20]", type=str)
-
     args.add_argument("--warmup_epoch_list", default="[5]", type=str)
     args.add_argument("--knn_k_list", default="[10]", type=str)
     args.add_argument("--sna_sample_size_list", default="[2048]", type=str)
@@ -121,7 +119,7 @@ class BiDSFAGroupBalanced(BaseModel):
         user_emb, item_emb = torch.split(all_emb, [self.num_users, self.num_items])
         return user_emb, item_emb
 
-    def cl_loss(self, u_idx, i_idx, j_idx):
+    def cl_loss(self, u_idx, i_idx):
         u_idx = torch.as_tensor(u_idx, device=self.device).long()
         i_idx = torch.as_tensor(i_idx, device=self.device).long()
 
@@ -312,7 +310,7 @@ class BiDSFAGroupBalanced(BaseModel):
             balanced_neg_idx,
         )
 
-        cl_loss, _, _ = self.cl_loss(u_idx, i_idx, same_neg_idx)
+        cl_loss, _, _ = self.cl_loss(u_idx, i_idx)
 
         self._update_knn_cache(
             item_embedding,
